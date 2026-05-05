@@ -31,14 +31,14 @@ namespace GUI_proyecto
             Application.Exit();
         }
 
-        private void hansAlvaradoToolStripMenuItem_Click(object sender, EventArgs e)
+        private void hansAlvaradoToolStripMenuItem_Click(object sen der, EventArgs e)
         {
             MessageBox.Show("Carne No.2500476", "Informacion del estudiante", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void marioMonroyToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            MessageBox.Show("Carne No.", "Informacion del estudiante", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Carne No. 23000140", "Informacion del estudiante", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 }
