@@ -1,0 +1,80 @@
+    1. Funcionamiento de los Módulos Implementados
+
+  A. Generación de Factura en PDF (Sustituye al .txt)
+   * Tecnología: Se utiliza la librería iText7.
+   * Lógica: Al confirmar una renta, el sistema extrae los datos del vehículo desde el
+     DataGridView y los datos del usuario desde la sesión activa.
+   * Resultado: Crea un documento con diseño de tabla profesional, encabezados en color azul y
+     un resumen financiero. Los archivos se almacenan en la carpeta /Facturas del proyecto.
+
+  B. Dashboard de Estadísticas (Tiempo Real)
+   * Lógica: Utiliza consultas LINQ sobre Entity Framework para contar registros en la base de
+     datos.
+   * Métricas:
+       * Inventario: Conteo de vehículos totales, disponibles y rentados.
+       * Usuarios: Total de cuentas registradas.
+       * Finanzas: Suma acumulada de todas las rentas realizadas (TotalGenerado).
+   * Actualización: El Dashboard se refresca automáticamente cada vez que se renta, devuelve,
+     importa o elimina un vehículo.
+
+  C. Módulo de Devolución (Recuperación)
+   * Lógica: El usuario ingresa una placa. El sistema busca el vehículo en la base de datos y
+     verifica que su estado sea "No Disponible".
+   * Acción: Cambia el bit Disponible de 0 a 1. Esto libera el vehículo para que aparezca de
+     nuevo en el catálogo de rentas.
+
+  D. Búsqueda y Filtros Inteligentes
+   * Búsqueda Dinámica: En el evento TextChanged del buscador, se aplica un filtro Where que
+     busca coincidencias en tres campos (Marca, Modelo, Placa) simultáneamente mientras el
+     usuario escribe.
+   * Filtros de Estado: Mediante RadioButtons, se añade una capa extra de filtrado para
+     segregar rápidamente qué vehículos están libres y cuáles ocupados.
+
+  E. Gestión Masiva (CSV)
+   * Importar: Lee archivos separados por comas, procesa cada línea como un objeto Vehiculo y
+     lo inserta en SQL Server solo si la placa no existe previamente (evita errores de clave
+     primaria).
+   * Exportar: Genera un reporte de auditoría en formato .csv que contiene la lista de
+     vehículos que el negocio tiene "en la calle" (rentados).
+
+  ---
+
+  2. Instrucciones para la Integración
+
+  Para que el código funcione correctamente en tu entorno de desarrollo, sigue estos pasos:
+
+  Paso 1: Instalar Dependencias (NuGet)
+  Abre la consola de administración de paquetes NuGet en Visual Studio e instala:
+   1 Install-Package itext7
+   2 Install-Package Microsoft.EntityFrameworkCore.SqlServer
+
+  Paso 2: Configuración de la Interfaz (UI)
+  Asegúrate de que los controles en tu formulario tengan los siguientes nombres (Name):
+   * Botones: btnRentar, btnDevolver, btnImportarCSV, btnExportarCSV, btnGuardarVehiculo.
+   * Entradas de Texto: txtBuscar, txtDiasRenta, txtPlacaDevolver, txtUser, txtPass.
+   * Etiquetas del Dashboard: lblTotalVehiculos, lblDisponibles, lblRentados,
+     lblTotalUsuarios, lblTotalVentas.
+   * Filtros: rbDisponibles, rbRentados, rbTodos.
+
+  Paso 3: Estructura de Archivos
+   * El sistema creará automáticamente una carpeta llamada Facturas en bin/Debug o
+     bin/Release. No necesitas crearla manualmente.
+   * Para importar vehículos, el archivo .csv debe tener este formato:
+      Placa,Marca,Modelo,PrecioPorDia
+      P123ABC,Toyota,Hilux,500
+
+  Paso 4: Base de Datos
+  El código asume que tu servidor es el local (.) y la base de datos es proyectoFinal. Si tu
+  servidor tiene otro nombre (ej. SQLEXPRESS), cámbialo en la línea de OnConfiguring dentro de
+  Form1.cs.
+
+  ---
+
+  3. Resumen de Seguridad y Validaciones
+   * Campos Obligatorios: Ninguna operación se realiza si hay campos vacíos (se usa .Trim()
+     para evitar espacios falsos).
+   * Integridad Numérica: Se usa int.TryParse y decimal.TryParse para evitar que el programa
+     se cierre si el usuario ingresa letras en campos de precio o días.
+   * Confirmación de Usuario: Todas las acciones destructivas (Eliminar) o financieras
+     (Rentar) piden confirmación al usuario antes de proceder.
+
