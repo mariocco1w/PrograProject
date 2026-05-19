@@ -1,402 +1,485 @@
+using Azure.Core;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Data;
 using System.Drawing;
-using System.IO;
-using System.Linq;
+using System.Text;
 using System.Windows.Forms;
-using iText.Kernel.Pdf;
-using iText.Layout;
-using iText.Layout.Element;
-using iText.Layout.Properties;
-using iText.Kernel.Colors;
-using iText.Layout.Borders;
+using static Proyecto_final_hans.Form1;
 
 namespace Proyecto_final_hans
 {
+
     public partial class Form2 : Form
     {
-        private Usuario _usuarioActual;
-        private string _facturasPath;
-
-        public Form2(Usuario user)
+        private Form1.Usuario usuarioActual;
+        decimal precioRenta;
+        bool disponibilidad;
+        string rutaArchivo;
+        public Form2(Form1.Usuario user)
         {
             InitializeComponent();
-            _usuarioActual = user;
-            _facturasPath = Path.Combine(Application.StartupPath, "Facturas");
-            Directory.CreateDirectory(_facturasPath);
-            ConfigurarSeguridad();
+            usuarioActual = user;
+            ConfigurarInterfaz();
+            string resourcesFolder = Path.Combine(Application.StartupPath, "rutasImagenes");
+            Directory.CreateDirectory(resourcesFolder);
+
+        }
+
+        //metodo que quita las tab pages si es user 
+        private void ConfigurarInterfaz()
+        {
+            // Si el rol es false (0), ocultamos botones de edición porque es un usuario normal
+            if (!usuarioActual.Rol)
+            {
+                string rolUser = "Cliente";
+                this.Text = $"Portal de Rentas - Bienvenido {usuarioActual.Username}, {rolUser}";
+                herramientasToolStripMenuItem.Visible = false;
+                tabControl1.TabPages.Remove(tabPage2);
+                tabControl1.TabPages.Remove(tabPage3);
+
+            }
+            else
+            {
+                string rolUser = "Administrador";
+                this.Text = $"Panel de Administración - Bienvenido {usuarioActual.Username}, {rolUser}";
+
+            }
+        }
+
+        private void cerrarSesionToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            Form1 login = new Form1();
+            login.Show();
+            this.Close(); // Esto destruye esta instancia y limpia la memoria
+        }
+
+        private void salirDeLaAplicacionToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            Application.Exit();
+        }
+
+        /// <summary>
+        /// metodo para actualizar la disponibilidad del carro despues de confirmar renta, lo que hace es buscar el carro por placa y cambiar su estado a no disponible
+        /// </summary>
+        private void actualizarDisp()
+        {
+            try
+            {
+                using (var db = new AppDbContext())
+                {
+                    var vehiculo = db.Vehiculos.FirstOrDefault(v => v.Placa == dataGridView1.CurrentRow.Cells["Placa"].Value.ToString());
+                    if (vehiculo != null)
+                    {
+                        vehiculo.Disponible = false; // Marcar como no disponible
+                        db.SaveChanges();
+                        Form2_Load(null, null); // Recargar datos para reflejar el cambio
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error al actualizar disponibilidad: " + ex.Message);
+            }
         }
 
         private void Form2_Load(object sender, EventArgs e)
         {
-            CargarDatos();
-            ActualizarDashboard();
-        }
-
-        private void ConfigurarSeguridad()
-        {
-            if (!_usuarioActual.Rol)
-            {
-                this.Text = $"Portal Cliente - {_usuarioActual.Username}";
-                // Ocultar elementos de administración
-                if (panelAdmin != null) panelAdmin.Visible = false;
-                if (tabAdmin != null) tabControlPrincipal.TabPages.Remove(tabAdmin);
-            }
-            else
-            {
-                this.Text = "Panel Administrativo - MODO ROOT";
-            }
-        }
-
-        // ==========================================
-        // LÓGICA DE DATOS Y FILTROS
-        // ==========================================
-
-        private void CargarDatos()
-        {
             try
             {
+                // conexion a la base de datos
                 using (var db = new AppDbContext())
                 {
-                    string busqueda = txtBuscar.Text.Trim().ToLower();
-                    var query = db.Vehiculos.AsQueryable();
+                    // lista
+                    var listaCarros = db.Vehiculos.ToList();
 
-                    // Filtros de búsqueda en tiempo real
-                    if (!string.IsNullOrEmpty(busqueda))
-                    {
-                        query = query.Where(v => v.Marca.ToLower().Contains(busqueda) || 
-                                               v.Modelo.ToLower().Contains(busqueda) || 
-                                               v.Placa.ToLower().Contains(busqueda));
-                    }
 
-                    // Filtros por estado
-                    if (rbDisponibles.Checked) query = query.Where(v => v.Disponible);
-                    else if (rbRentados.Checked) query = query.Where(v => !v.Disponible);
+                    dataGridView1.DataSource = listaCarros;
 
-                    dgvVehiculos.DataSource = query.ToList();
+                    // 2. Cargar el ComboBox
+                    selectCar.DataSource = null;
+                    selectCar.DisplayMember = "placa";
+                    selectCar.ValueMember = "Id";
+                    selectCar.DataSource = listaCarros;
+
+                    //  empezar sin nada seleccionado
+                    selectCar.SelectedIndex = -1;
+
+
+
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error al cargar datos: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Error al cargar datos: " + ex.Message);
             }
+
+
         }
-
-        private void txtBuscar_TextChanged(object sender, EventArgs e) => CargarDatos();
-        private void rbFiltro_CheckedChanged(object sender, EventArgs e) => CargarDatos();
-
-        // ==========================================
-        // LÓGICA DE RENTA Y PDF
-        // ==========================================
-
-        private void btnRentar_Click(object sender, EventArgs e)
+        //metodo para buscar por placa, lo que hace es filtrar la lista de carros por los que contengan el texto ingresado en el textbox, y luego actualizar el datagridview con los resultados
+        private void textBox1_TextChanged(object sender, EventArgs e)
         {
-            if (dgvVehiculos.CurrentRow == null) return;
 
-            string placa = dgvVehiculos.CurrentRow.Cells["Placa"].Value.ToString();
-            
-            if (!int.TryParse(txtDiasRenta.Text, out int dias) || dias <= 0)
-            {
-                MessageBox.Show("Ingrese una cantidad de días válida (mayor a 0).", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            using (var db = new AppDbContext())
-            {
-                var v = db.Vehiculos.Find(placa);
-                if (v == null || !v.Disponible)
-                {
-                    MessageBox.Show("El vehículo ya no está disponible.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                decimal total = v.PrecioPorDia * dias;
-                
-                if (MessageBox.Show($"Total a pagar: Q{total:F2}\n¿Confirmar renta?", "Confirmación", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                {
-                    v.Disponible = false;
-                    
-                    var renta = new Renta {
-                        PlacaVehiculo = v.Placa,
-                        Username = _usuarioActual.Username,
-                        Fecha = DateTime.Now,
-                        Dias = dias,
-                        Total = total
-                    };
-
-                    db.Rentas.Add(renta);
-                    db.SaveChanges();
-
-                    GenerarFacturaPDF(v, renta);
-                    
-                    MessageBox.Show("Renta exitosa. El PDF ha sido generado en la carpeta 'Facturas'.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    CargarDatos();
-                    ActualizarDashboard();
-                }
-            }
-        }
-
-        private void GenerarFacturaPDF(Vehiculo v, Renta r)
-        {
-            string filePath = Path.Combine(_facturasPath, $"Factura_{v.Placa}_{DateTime.Now:yyyyMMdd_HHmm}.pdf");
-            
-            using (PdfWriter writer = new PdfWriter(filePath))
-            {
-                using (PdfDocument pdf = new PdfDocument(writer))
-                {
-                    Document doc = new Document(pdf);
-                    
-                    // Diseño Profesional
-                    doc.Add(new Paragraph("FACTURA DE RENTA DE VEHÍCULO")
-                        .SetTextAlignment(TextAlignment.CENTER)
-                        .SetFontSize(20)
-                        .SetBold()
-                        .SetFontColor(ColorConstants.BLUE));
-
-                    doc.Add(new Paragraph($"Fecha de Emisión: {r.Fecha:dd/MM/yyyy HH:mm:ss}"));
-                    doc.Add(new Paragraph($"Cliente: {r.Username}").SetBold());
-                    doc.Add(new Paragraph("\n"));
-
-                    Table table = new Table(UnitValue.CreatePercentArray(new float[] { 40, 60 })).UseAllAvailableWidth();
-                    table.AddHeaderCell("Concepto");
-                    table.AddHeaderCell("Detalle");
-
-                    table.AddCell("Vehículo"); table.AddCell($"{v.Marca} {v.Modelo}");
-                    table.AddCell("Placa"); table.AddCell(v.Placa);
-                    table.AddCell("Días de Renta"); table.AddCell(r.Dias.ToString());
-                    table.AddCell("Precio por Día"); table.AddCell($"Q{v.PrecioPorDia:F2}");
-                    
-                    Cell totalCell = new Cell(1, 2).Add(new Paragraph($"TOTAL PAGADO: Q{r.Total:F2}")
-                        .SetBold()
-                        .SetFontSize(14)
-                        .SetTextAlignment(TextAlignment.RIGHT))
-                        .SetBackgroundColor(ColorConstants.LIGHT_GRAY);
-                    table.AddFooterCell(totalCell);
-
-                    doc.Add(table);
-                    doc.Add(new Paragraph("\nGracias por confiar en nosotros.")
-                        .SetTextAlignment(TextAlignment.CENTER)
-                        .SetItalic());
-                }
-            }
-        }
-
-        // ==========================================
-        // DEVOLUCIÓN DE VEHÍCULO
-        // ==========================================
-
-        private void btnDevolver_Click(object sender, EventArgs e)
-        {
-            string placaInput = txtPlacaDevolver.Text.Trim().ToUpper();
-
-            if (string.IsNullOrEmpty(placaInput))
-            {
-                MessageBox.Show("Ingrese la placa del vehículo a devolver.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            using (var db = new AppDbContext())
-            {
-                var v = db.Vehiculos.FirstOrDefault(veh => veh.Placa == placaInput);
-
-                if (v == null)
-                {
-                    MessageBox.Show("El vehículo con esa placa no existe.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                if (v.Disponible)
-                {
-                    MessageBox.Show("El vehículo ya se encuentra en inventario (Disponible).", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-
-                if (MessageBox.Show($"¿Confirmar devolución de {v.Marca} {v.Modelo}?", "Devolución", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                {
-                    v.Disponible = true;
-                    db.SaveChanges();
-
-                    MessageBox.Show("Vehículo devuelto exitosamente.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    txtPlacaDevolver.Clear();
-                    CargarDatos();
-                    ActualizarDashboard();
-                }
-            }
-        }
-
-        // ==========================================
-        // DASHBOARD ESTADÍSTICO
-        // ==========================================
-
-        private void ActualizarDashboard()
-        {
             try
             {
                 using (var db = new AppDbContext())
                 {
-                    lblTotalVehiculos.Text = db.Vehiculos.Count().ToString();
-                    lblDisponibles.Text = db.Vehiculos.Count(v => v.Disponible).ToString();
-                    lblRentados.Text = db.Vehiculos.Count(v => !v.Disponible).ToString();
-                    lblTotalUsuarios.Text = db.Usuarios.Count().ToString();
-                    
-                    decimal totalGenerado = db.Rentas.Sum(r => (decimal?)r.Total) ?? 0;
-                    lblTotalVentas.Text = $"Q{totalGenerado:N2}";
+
+                    string busqueda = textBox1.Text.Trim();
+
+
+                    // Busca todos los registros que coincden
+                    var resultados = db.Vehiculos
+                        .Where(x => x.Placa.Contains(busqueda))
+                        .ToList();
+
+
+                    dataGridView1.DataSource = resultados;
                 }
             }
-            catch { /* Silencioso para evitar interrupciones visuales */ }
+            catch (Exception ex)
+            {
+
+                Console.WriteLine("Error en búsqueda: " + ex.Message);
+            }
+
+
+
         }
 
-        // ==========================================
-        // MANTENIMIENTO DE VEHÍCULOS (ADMIN)
-        // ==========================================
-
-        private void btnGuardarVehiculo_Click(object sender, EventArgs e)
+        //metodo para mostrar la imagen del carro seleccionado, lo que hace es obtener la ruta de la imagen guardada en la base de datos y cargarla en el picturebox
+        private void dataGridView1_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtPlaca.Text) || string.IsNullOrWhiteSpace(txtMarca.Text))
-            {
-                MessageBox.Show("Complete todos los campos del vehículo.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            if (!decimal.TryParse(txtPrecio.Text, out decimal precio) || precio <= 0)
-            {
-                MessageBox.Show("El precio debe ser un número mayor a 0.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            using (var db = new AppDbContext())
-            {
-                string placa = txtPlaca.Text.Trim().ToUpper();
-                if (db.Vehiculos.Any(v => v.Placa == placa))
-                {
-                    MessageBox.Show("Error: La placa ya está registrada.", "Duplicado", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                db.Vehiculos.Add(new Vehiculo {
-                    Placa = placa,
-                    Marca = txtMarca.Text.Trim(),
-                    Modelo = txtModelo.Text.Trim(),
-                    PrecioPorDia = precio,
-                    Disponible = true,
-                    RutaImagen = ""
-                });
-
-                db.SaveChanges();
-                MessageBox.Show("Vehículo agregado correctamente.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                CargarDatos();
-                ActualizarDashboard();
-            }
-        }
-
-        private void btnEliminar_Click(object sender, EventArgs e)
-        {
-            if (dgvVehiculos.CurrentRow == null) return;
-
-            if (MessageBox.Show("¿Está seguro de eliminar este registro permanentemente?", "Confirmar Eliminación", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-            {
-                string placa = dgvVehiculos.CurrentRow.Cells["Placa"].Value.ToString();
-                using (var db = new AppDbContext())
-                {
-                    var v = db.Vehiculos.Find(placa);
-                    if (v != null)
-                    {
-                        db.Vehiculos.Remove(v);
-                        db.SaveChanges();
-                        CargarDatos();
-                        ActualizarDashboard();
-                    }
-                }
-            }
-        }
-        // ==========================================
-        // IMPORTACIÓN Y EXPORTACIÓN CSV (ADMIN)
-        // ==========================================
-
-        private void btnImportarCSV_Click(object sender, EventArgs e)
-        {
-            OpenFileDialog openFile = new OpenFileDialog { Filter = "Archivos CSV (*.csv)|*.csv" };
-            if (openFile.ShowDialog() == DialogResult.OK)
+            if (e.RowIndex >= 0)
             {
                 try
                 {
-                    using (var db = new AppDbContext())
+                    // Obtener la fila seleccionada
+                    DataGridViewRow fila = dataGridView1.Rows[e.RowIndex];
+                    precioRenta = Convert.ToDecimal(fila.Cells["precioPorDia"].Value);
+                    disponibilidad = Convert.ToBoolean(fila.Cells["disponible"].Value);
+
+
+
+                    // Obtener la ruta guardada en la base de datos
+                    string imagePath = fila.Cells["rutaImagen"].Value?.ToString();
+
+                    if (!string.IsNullOrEmpty(imagePath))
                     {
-                        string[] lineas = File.ReadAllLines(openFile.FileName);
-                        int importados = 0;
+                        // Si guardaste ruta relativa, la convertimos a absoluta
+                        string fullPath = Path.Combine(Application.StartupPath, imagePath);
 
-                        foreach (string linea in lineas.Skip(1)) // Saltar encabezado
+                        if (File.Exists(fullPath))
                         {
-                            if (string.IsNullOrWhiteSpace(linea)) continue;
-                            var datos = linea.Split(',');
-
-                            if (datos.Length < 4) continue;
-
-                            string placa = datos[0].Trim().ToUpper();
-                            
-                            // Validación: No permitir placas repetidas
-                            if (!db.Vehiculos.Any(v => v.Placa == placa))
-                            {
-                                if (decimal.TryParse(datos[3].Trim(), out decimal precio))
-                                {
-                                    db.Vehiculos.Add(new Vehiculo
-                                    {
-                                        Placa = placa,
-                                        Marca = datos[1].Trim(),
-                                        Modelo = datos[2].Trim(),
-                                        PrecioPorDia = precio,
-                                        Disponible = true,
-                                        RutaImagen = ""
-                                    });
-                                    importados++;
-                                }
-                            }
+                            pictureBox1.ImageLocation = fullPath;
                         }
-                        db.SaveChanges();
-                        MessageBox.Show($"{importados} vehículos importados exitosamente.", "Éxito", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        CargarDatos();
-                        ActualizarDashboard();
+                        else
+                        {
+                            MessageBox.Show("La imagen no existe en la carpeta.");
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Error al importar CSV: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("Error al cargar imagen: " + ex.Message);
                 }
+            }
+            //--------------------------------------------------------------------
+
+
+
+        }
+
+
+
+        //NO TOCAR ESTO, ES SOLO PARA PRUEBAS DE INTERFAZ, SI LO TOCAS SE ROMPE TODO
+        private void tabPage1_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        //NO TOCAR
+        private void comboBox1_SelectedIndexChanged(object sender, EventArgs e)
+        {
+
+
+        }
+
+        //metodo para confirmar la renta, lo que hace es calcular el total a pagar segun la opcion seleccionada en el combo box y mostrarlo en un label, ademas de actualizar la disponibilidad del carro
+        private void confirmarRenta_Click(object sender, EventArgs e)
+        {
+
+
+            if (precioRenta > 0)
+            {
+                if (!disponibilidad)
+                {
+                    MessageBox.Show("Este vehículo no está disponible para renta.");
+                    return;
+                }
+
+
+                if (comboBox1.Text.Trim() == "1 dia")
+                {
+                    decimal totalRenta = precioRenta * 1;
+                    label3.Text = $"Total a pagar: ${totalRenta:N2}";
+                    actualizarDisp();
+
+                }
+                else if (comboBox1.Text.Trim() == "3 dias")
+                {
+                    decimal totalRenta = precioRenta * 3;
+                    label3.Text = $"Total a pagar: ${totalRenta:N2}";
+                    actualizarDisp();
+                }
+                else if (comboBox1.Text.Trim() == "1 semana")
+                {
+                    decimal totalRenta = precioRenta * 7;
+                    label3.Text = $"Total a pagar: ${totalRenta:N2}";
+                    actualizarDisp();
+                }
+                else
+                {
+                    MessageBox.Show("Por favor, selecciona una opción de la lista.");
+                }
+            }
+            else
+            {
+                MessageBox.Show("Primero selecciona un vehículo haciendo clic en la tabla.");
+            }
+
+        }
+
+        //metodo para mostrar el precio del carro seleccionado en el combo box, lo que hace es obtener el precio del carro seleccionado y mostrarlo en un textbox para que el admin pueda editarlo si lo desea
+        private void selectCar_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            using (var db = new AppDbContext())
+            {
+
+                if (selectCar.SelectedItem != null)
+                {
+                    precioBox.Text = ((Vehiculo)selectCar.SelectedItem).PrecioPorDia.ToString("N2");
+
+                }
+
+
+
+
+
+
+            }
+
+
+        }
+
+        // metodo para forzar la disponibilidad del carro seleccionado, lo que hace es buscar el carro por placa y cambiar su estado a disponible, esto es util para cuando un admin quiere corregir un error o un cliente devuelve el carro sin avisar
+        private void forzarDisponibilidad_Click(object sender, EventArgs e)
+        {
+
+            if (selectCar.SelectedItem != null && selectCar.Text != "nuevo carro")
+            {
+                try
+                {
+
+                    string placaSeleccionada = selectCar.Text;
+
+                    using (var db = new AppDbContext())
+                    {
+
+
+                        var vehiculo = db.Vehiculos.FirstOrDefault(v => v.Placa == placaSeleccionada);
+
+                        if (vehiculo != null)
+                        {
+
+                            if (vehiculo.Disponible)
+                            {
+                                MessageBox.Show($"El vehículo {placaSeleccionada} ya se encuentra disponible.");
+                            }
+                            else
+                            {
+
+                                vehiculo.Disponible = true;
+                                db.SaveChanges();
+
+                                MessageBox.Show($"El vehículo {placaSeleccionada} ahora está disponible.");
+
+
+                                Form2_Load(null, null);
+                            }
+                        }
+                        else
+                        {
+                            MessageBox.Show("No se encontró el vehículo en la base de datos.");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Error: " + ex.Message);
+                }
+            }
+            else
+            {
+                MessageBox.Show("Seleccione una placa válida.");
             }
         }
 
-        private void btnExportarCSV_Click(object sender, EventArgs e)
+        //metodo para editar el precio del carro seleccionado, lo que hace es buscar el carro por placa y cambiar su precio por el valor ingresado en el textbox, ademas de mostrar un mensaje de confirmacion antes de guardar los cambios
+        private void editPrecio_Click(object sender, EventArgs e)
         {
-            try
+            if (selectCar.SelectedItem != null && selectCar.Text != "nuevo carro")
             {
+                string placaSeleccionada = selectCar.Text;
                 using (var db = new AppDbContext())
                 {
-                    // Reporte de vehículos actualmente RENTADOS (Disponible = false)
-                    var rentados = db.Vehiculos.Where(v => !v.Disponible).ToList();
 
-                    if (rentados.Count == 0)
+                    var vehiculo = db.Vehiculos.FirstOrDefault(v => v.Placa == placaSeleccionada); // Buscamos el registro original
+
+                    if (vehiculo != null)
                     {
-                        MessageBox.Show("No hay vehículos rentados para exportar.", "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        try
+                        {
+                            vehiculo.PrecioPorDia = decimal.Parse(precioBox.Text);
+                        }
+                        catch (FormatException)
+                        {
+                            MessageBox.Show("Ingrese un precio válido.");
+                            return;
+                        }
+
+                        if (MessageBox.Show("Confirmar cambios?", "AVISO", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK)
+                        {
+                            MessageBox.Show($"Precio editado con exito", vehiculo.Placa, MessageBoxButtons.OK);
+                            db.SaveChanges();
+                            Form2_Load(null, null);
+                        }
+                        else
+                        {
+                            return;
+                        }
+
+                    }
+                }
+
+            }
+            else
+            {
+                MessageBox.Show("Seleccione una placa válida para editar su precio.");
+            }
+
+
+
+
+
+        }
+
+        //metodo para agregar un nuevo carro, lo que hace es crear un nuevo objeto de tipo vehiculo con los datos ingresados en los textbox y guardarlo en la base de datos, ademas de mostrar un mensaje de confirmacion antes de guardar los cambios
+        private void nuevoCarro_Click(object sender, EventArgs e)
+        {
+            using (var db = new AppDbContext())
+            {
+                decimal precioNuevo;
+                //verificar si precioBox puede hacer parse
+                try
+                {
+                    precioNuevo = decimal.Parse(precioBox.Text);
+                }
+                catch (FormatException) { MessageBox.Show("Ingrese un precio válido."); return; }
+
+                //veficar si hay imagen seleccionada 
+                try
+                {
+                    if (string.IsNullOrEmpty(rutaArchivo))
+                    {
+                        MessageBox.Show("Seleccione una imagen para el vehículo.");
                         return;
                     }
 
-                    string reportePath = Path.Combine(Application.StartupPath, "Reporte_Vehiculos_Rentados.csv");
-                    using (StreamWriter sw = new StreamWriter(reportePath, false, Encoding.UTF8))
-                    {
-                        sw.WriteLine("Placa,Marca,Modelo,PrecioPorDia");
-                        foreach (var v in rentados)
-                        {
-                            sw.WriteLine($"{v.Placa},{v.Marca},{v.Modelo},{v.PrecioPorDia}");
-                        }
-                    }
-                    MessageBox.Show($"Reporte CSV generado en:\n{reportePath}", "Exportación Exitosa", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Error al cargar imagen: " + ex.Message);
+                    return;
+                }
+
+
+
+                // Creamos el objeto con los datos de los TextBox
+                Vehiculo nuevoVehiculo = new Vehiculo
+                {
+                    Placa = placaBox.Text,
+                    Modelo = modeloBox.Text,
+                    Marca = maraBox.Text,
+                    PrecioPorDia = precioNuevo,
+                    RutaImagen = rutaArchivo,
+                    Disponible = true
+                };
+                MessageBox.Show(rutaArchivo);
+
+                db.Vehiculos.Add(nuevoVehiculo); // Equivale al INSERT INTO
+                db.SaveChanges(); // IMPORTANTE: Esto ejecuta la operación en SQL
+                Form2_Load(null, null);
+
+
+
             }
-            catch (Exception ex)
+
+
+        }
+
+
+        //metodo para cargar la imagen del carro, lo que hace es abrir un cuadro de dialogo para seleccionar una imagen y luego copiarla a la carpeta de recursos del proyecto, ademas de guardar la ruta relativa en una variable para luego guardarla en la base de datos
+        private void cargarImagen_Click(object sender, EventArgs e)
+        {
+
+            OpenFileDialog buscador = new OpenFileDialog();
+
+
+            buscador.Filter = "Imágenes JPG|*.jpg|Imágenes PNG|*.png";
+            buscador.Title = "Seleccionar imagen del vehículo";
+
+            if (buscador.ShowDialog() == DialogResult.OK)
             {
-                MessageBox.Show($"Error al exportar CSV: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                string rutaOrigen = buscador.FileName;
+                rutaArchivo = buscador.SafeFileName;
+                rutaArchivo = Path.Combine(Application.StartupPath, "rutasImagenes", rutaArchivo);
+                File.Copy(rutaOrigen, rutaArchivo, true);
+
+                MessageBox.Show($"Imagen cargada exitosamente '{rutaArchivo}'.");
+
             }
+
+
+        }
+
+        //metodo para eliminar un carro, lo que hace es buscar el carro por placa y eliminarlo de la base de datos, ademas de mostrar un mensaje de confirmacion antes de eliminar el registro
+        private void eliminarCarro_Click(object sender, EventArgs e)
+        {
+
+            using (var db = new AppDbContext())
+            {
+
+                if (selectCar.SelectedItem != null)
+                {
+                    string placaSeleccionada = selectCar.Text;
+                    var carroEliminado = db.Vehiculos.FirstOrDefault(v => v.Placa == placaSeleccionada);
+
+                    MessageBox.Show($"Seguro que desea eliminar este carro? [{carroEliminado.Placa}]", "ADVERTENCIA", MessageBoxButtons.OKCancel);
+                    db.Vehiculos.Remove(carroEliminado); // Equivale al DELETE FROM... WHERE ID = id
+                    db.SaveChanges();
+
+                }
+
+
+            }
+
+
+
+            //--------------------------
         }
     }
 }
+
