@@ -6,6 +6,9 @@ using System.Data;
 using System.Drawing;
 using System.Text;
 using System.Windows.Forms;
+using System.Linq;
+using System.IO;
+using System.Text.Json;
 using static Proyecto_final_hans.Form1;
 
 namespace Proyecto_final_hans
@@ -17,14 +20,78 @@ namespace Proyecto_final_hans
         decimal precioRenta;
         bool disponibilidad;
         string rutaArchivo;
+
+        // Nuevos controles para CRUD de Usuarios
+        private TabPage tabPageUsuarios;
+        private DataGridView dgvUsuarios;
+        private TextBox txtUserUsername;
+        private TextBox txtUserPassword;
+        private CheckBox chkUserRol;
+        private Button btnUserCreate;
+        private Button btnUserUpdate;
+        private Button btnUserDelete;
+
         public Form2(Form1.Usuario user)
         {
             InitializeComponent();
             usuarioActual = user;
+            SetupExtraFeatures();
             ConfigurarInterfaz();
             string resourcesFolder = Path.Combine(Application.StartupPath, "rutasImagenes");
             Directory.CreateDirectory(resourcesFolder);
 
+        }
+
+        private void SetupExtraFeatures()
+        {
+            // Solo agregar para administradores
+            if (usuarioActual.Rol)
+            {
+                // 1. Crear TabPage de Usuarios
+                tabPageUsuarios = new TabPage("Gestión de Usuarios");
+                
+                dgvUsuarios = new DataGridView();
+                dgvUsuarios.Location = new Point(10, 10);
+                dgvUsuarios.Size = new Size(400, 300);
+                dgvUsuarios.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                dgvUsuarios.CellClick += DgvUsuarios_CellClick;
+
+                Label lblUser = new Label { Text = "Usuario:", Location = new Point(420, 10), AutoSize = true };
+                txtUserUsername = new TextBox { Location = new Point(420, 30), Width = 150 };
+
+                Label lblPass = new Label { Text = "Contraseña:", Location = new Point(420, 60), AutoSize = true };
+                txtUserPassword = new TextBox { Location = new Point(420, 80), Width = 150, UseSystemPasswordChar = true };
+
+                chkUserRol = new CheckBox { Text = "Es Administrador", Location = new Point(420, 110), AutoSize = true };
+
+                btnUserCreate = new Button { Text = "Crear", Location = new Point(420, 140), Width = 70 };
+                btnUserCreate.Click += BtnUserCreate_Click;
+
+                btnUserUpdate = new Button { Text = "Actualizar", Location = new Point(500, 140), Width = 70 };
+                btnUserUpdate.Click += BtnUserUpdate_Click;
+
+                btnUserDelete = new Button { Text = "Eliminar", Location = new Point(420, 175), Width = 150 };
+                btnUserDelete.Click += BtnUserDelete_Click;
+
+                tabPageUsuarios.Controls.AddRange(new Control[] { 
+                    dgvUsuarios, lblUser, txtUserUsername, lblPass, txtUserPassword, 
+                    chkUserRol, btnUserCreate, btnUserUpdate, btnUserDelete 
+                });
+
+                tabControl1.TabPages.Add(tabPageUsuarios);
+                CargarUsuarios();
+
+                // 2. Agregar opciones de Importación/Exportación al MenuStrip
+                var menuImportar = new ToolStripMenuItem("Importar Datos JSON");
+                menuImportar.Click += MenuImportar_Click;
+                
+                var menuExportar = new ToolStripMenuItem("Exportar Datos JSON");
+                menuExportar.Click += MenuExportar_Click;
+
+                herramientasToolStripMenuItem.DropDownItems.Add(new ToolStripSeparator());
+                herramientasToolStripMenuItem.DropDownItems.Add(menuImportar);
+                herramientasToolStripMenuItem.DropDownItems.Add(menuExportar);
+            }
         }
 
         //metodo que quita las tab pages si es user 
@@ -479,6 +546,232 @@ namespace Proyecto_final_hans
 
 
             //--------------------------
+        }
+
+        // ==========================================
+        // LÓGICA DE GESTIÓN DE USUARIOS (CRUD)
+        // ==========================================
+
+        private void CargarUsuarios()
+        {
+            try
+            {
+                using (var db = new AppDbContext())
+                {
+                    dgvUsuarios.DataSource = db.Usuarios.ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error al cargar usuarios: " + ex.Message);
+            }
+        }
+
+        private void DgvUsuarios_CellClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex >= 0)
+            {
+                DataGridViewRow row = dgvUsuarios.Rows[e.RowIndex];
+                txtUserUsername.Text = row.Cells["Username"].Value.ToString();
+                txtUserPassword.Text = row.Cells["Password"].Value.ToString();
+                chkUserRol.Checked = Convert.ToBoolean(row.Cells["Rol"].Value);
+            }
+        }
+
+        private void BtnUserCreate_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrEmpty(txtUserUsername.Text) || string.IsNullOrEmpty(txtUserPassword.Text))
+            {
+                MessageBox.Show("Complete los campos de usuario y contraseña.");
+                return;
+            }
+
+            try
+            {
+                using (var db = new AppDbContext())
+                {
+                    if (db.Usuarios.Any(u => u.Username == txtUserUsername.Text))
+                    {
+                        MessageBox.Show("El nombre de usuario ya existe.");
+                        return;
+                    }
+
+                    var nuevoUsuario = new Usuario
+                    {
+                        Username = txtUserUsername.Text,
+                        Password = txtUserPassword.Text,
+                        Rol = chkUserRol.Checked
+                    };
+
+                    db.Usuarios.Add(nuevoUsuario);
+                    db.SaveChanges();
+                    MessageBox.Show("Usuario creado con éxito.");
+                    CargarUsuarios();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error al crear usuario: " + ex.Message);
+            }
+        }
+
+        private void BtnUserUpdate_Click(object sender, EventArgs e)
+        {
+            if (dgvUsuarios.CurrentRow == null) return;
+
+            int id = (int)dgvUsuarios.CurrentRow.Cells["IdUsuario"].Value;
+
+            try
+            {
+                using (var db = new AppDbContext())
+                {
+                    var usuario = db.Usuarios.Find(id);
+                    if (usuario != null)
+                    {
+                        usuario.Username = txtUserUsername.Text;
+                        usuario.Password = txtUserPassword.Text;
+                        usuario.Rol = chkUserRol.Checked;
+
+                        db.SaveChanges();
+                        MessageBox.Show("Usuario actualizado con éxito.");
+                        CargarUsuarios();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error al actualizar usuario: " + ex.Message);
+            }
+        }
+
+        private void BtnUserDelete_Click(object sender, EventArgs e)
+        {
+            if (dgvUsuarios.CurrentRow == null) return;
+
+            int id = (int)dgvUsuarios.CurrentRow.Cells["IdUsuario"].Value;
+            string userToDelete = dgvUsuarios.CurrentRow.Cells["Username"].Value.ToString();
+
+            if (userToDelete == usuarioActual.Username)
+            {
+                MessageBox.Show("No puedes eliminarte a ti mismo.");
+                return;
+            }
+
+            if (MessageBox.Show($"¿Seguro que desea eliminar al usuario {userToDelete}?", "Confirmar", MessageBoxButtons.YesNo) == DialogResult.Yes)
+            {
+                try
+                {
+                    using (var db = new AppDbContext())
+                    {
+                        var usuario = db.Usuarios.Find(id);
+                        if (usuario != null)
+                        {
+                            db.Usuarios.Remove(usuario);
+                            db.SaveChanges();
+                            CargarUsuarios();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Error al eliminar usuario: " + ex.Message);
+                }
+            }
+        }
+
+        // ==========================================
+        // HERRAMIENTAS DE IMPORTACIÓN Y EXPORTACIÓN
+        // ==========================================
+
+        private class DataPackage
+        {
+            public List<Usuario> Usuarios { get; set; }
+            public List<Vehiculo> Vehiculos { get; set; }
+        }
+
+        private void MenuExportar_Click(object sender, EventArgs e)
+        {
+            SaveFileDialog sfd = new SaveFileDialog();
+            sfd.Filter = "Archivos JSON|*.json";
+            sfd.FileName = "respaldo_datos.json";
+
+            if (sfd.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    using (var db = new AppDbContext())
+                    {
+                        var package = new DataPackage
+                        {
+                            Usuarios = db.Usuarios.ToList(),
+                            Vehiculos = db.Vehiculos.ToList()
+                        };
+
+                        string json = JsonSerializer.Serialize(package, new JsonSerializerOptions { WriteIndented = true });
+                        File.WriteAllText(sfd.FileName, json);
+                        MessageBox.Show("Datos exportados exitosamente a JSON.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Error al exportar: " + ex.Message);
+                }
+            }
+        }
+
+        private void MenuImportar_Click(object sender, EventArgs e)
+        {
+            OpenFileDialog ofd = new OpenFileDialog();
+            ofd.Filter = "Archivos JSON|*.json";
+
+            if (ofd.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    string json = File.ReadAllText(ofd.FileName);
+                    var package = JsonSerializer.Deserialize<DataPackage>(json);
+
+                    if (package != null)
+                    {
+                        using (var db = new AppDbContext())
+                        {
+                            // Limpiar y cargar usuarios (evitando duplicar IDs si es posible, o simplemente añadir nuevos)
+                            if (package.Usuarios != null)
+                            {
+                                foreach (var u in package.Usuarios)
+                                {
+                                    if (!db.Usuarios.Any(existente => existente.Username == u.Username))
+                                    {
+                                        u.IdUsuario = 0; // Dejar que la BD genere nuevo ID
+                                        db.Usuarios.Add(u);
+                                    }
+                                }
+                            }
+
+                            // Limpiar y cargar vehículos
+                            if (package.Vehiculos != null)
+                            {
+                                foreach (var v in package.Vehiculos)
+                                {
+                                    if (!db.Vehiculos.Any(existente => existente.Placa == v.Placa))
+                                    {
+                                        db.Vehiculos.Add(v);
+                                    }
+                                }
+                            }
+
+                            db.SaveChanges();
+                            MessageBox.Show("Datos importados (solo registros nuevos añadidos).");
+                            Form2_Load(null, null); // Recargar vehículos
+                            CargarUsuarios();      // Recargar usuarios
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Error al importar: " + ex.Message);
+                }
+            }
         }
     }
 }
